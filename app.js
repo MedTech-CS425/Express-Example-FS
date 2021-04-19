@@ -4,8 +4,19 @@ const fs = require('fs');
 const bluebird = require('bluebird');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+require('dotenv').config()
+// Connecting to mongodb
+const mongoose = require('mongoose');
+mongoose.connect(process.env.MONGODB_URI, {useNewUrlParser: true, useUnifiedTopology: true});
+
+mongoose.connection.on('error', console.error.bind(console, 'connection error:'));
+mongoose.connection.once('open', function() {
+  console.log('Connected to MongoDB');
+});
+
 app.use(express.json());
-bluebird.promisifyAll(fs);
+
+// Auhtorization Middleware
 const auth = (req, res, next) => {
   try {
     jwt.verify(req.get('Authorization'), 'anysecret');
@@ -15,57 +26,83 @@ const auth = (req, res, next) => {
   }
 }
 
-app.post('/students', auth, (req, res) => {
-  fs.readFileAsync('./students.json')
-  .then((data) =>{
-    const students = JSON.parse(data);
-    students.push(req.body);
-    return students;
-  }).then(data =>{
-    data = JSON.stringify(data);
-    return fs.writeFileAsync('./students.json', data);
-  }).then(() =>{
-    res.send('Student Created');
-  }).catch((err) =>{
-    res.send(err);
-  });  
+// Defining the students Schema
+const StudentSchema = new mongoose.Schema({
+  fistName: String,
+  lastName: String,
+  email: String,
+  password: String,
+  age: Number,
+  skills: [String]
+});
+const StudentsModel = mongoose.model('Student', StudentSchema);
+
+
+app.post('/students', async (req, res) => {
+  try {
+    req.body.password = await bcrypt.hash(req.body.password, 12);
+    const student = await StudentsModel.create(req.body);
+    res.json({
+      message: 'Student Added Successfully',
+      student
+    })
+  } catch (error) {
+    res.send('You have Validation Error')
+  }
 });
 
-app.get('/students', auth, (req, res) => {
-  fs.readFileAsync('./students.json').then((data) => {
-    data = JSON.parse(data);
-    res.json(data);
-  }).catch((err) => res.send(err));
+app.get('/students', async (req, res) => {
+  try {
+    const students = await StudentsModel.find();
+    res.json(students);
+  } catch (error) {
+    res.send(error)
+  }
 });
 
-app.get('/students/:index', auth, (req, res) =>{
-  fs.readFileAsync('./students.json').then(data => {
-    data = JSON.parse(data);
-    res.json(data[req.params.index]);
-  }).catch((err)=>res.send(err));
+app.get('/students/:id', async (req, res) =>{
+  try {
+    const student = await StudentsModel.findById(req.params.id);
+    res.json(student);
+  } catch (error) {
+    res.send(error);
+  }
 });
 
-app.post('/signup', async (req, res) =>{
-  let data = await fs.readFileAsync('./students.json');
-  data = JSON.parse(data);
-  req.body.password = await bcrypt.hash(req.body.password, 12);
-  data.push(req.body);
-  await fs.writeFileAsync('./students.json', JSON.stringify(data));
-  res.send('Account Created');
+app.delete('/students/:id', async (req, res) =>{
+  try {
+    await StudentsModel.findByIdAndRemove(req.params.id);
+    res.send('Student Deleted');
+  } catch (error) {
+    res.send(error);
+  }
 });
+
+app.delete('/students', async (req, res) =>{
+  try {
+    await StudentsModel.deleteMany();
+    res.send('Students Deleted');
+  } catch (error) {
+    res.send(error);
+  }
+});
+
+
+
 
 app.post('/login', async (req, res) => {
-  let data = await fs.readFileAsync('./students.json');
-  data = JSON.parse(data);
-  for (const element of data) {
-    console.log(element);
-    if(element.email === req.body.email ) {
-      if(await bcrypt.compare(req.body.password, element.password)){
-        res.json(jwt.sign(element.email, 'anysecret'));
-      }else{
-        res.send('password is incorrect');
-      }
+  try {
+    const student = await StudentsModel.findOne({email: req.body.email});
+    if(!student){
+      res.send('Email Does Not Exist')
     }
+    const match = await bcrypt.compare(req.body.password, student.password);
+    if(!match){
+      res.send('Incorrect Password')
+    }
+    res.json({token: jwt.sign({id: student._id}, 'anysecret')})
+  } catch (error) {
+    res.send(error)
   }
 });
 
